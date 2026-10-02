@@ -1,0 +1,17 @@
+---
+#NetBox connection
+netbox_url: "{{ lookup('env', 'NETBOX_API') }}"
+netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') }}"
+
+#Идентификаторы объектов в NetBox
+pxe_device_name: "{{ inventory_hostname }}" 
+pxe_interface_name: "eth0" # интерфейс изменить на правильный
+
+#Настройки Debian
+debian_release: trixie
+debian_arch: amd64
+debian_mirror: http://deb.debian.org/debian
+
+# Пути
+tftp_root: /var/lib/tftpboot
+http_root: /var/www/html/pxe

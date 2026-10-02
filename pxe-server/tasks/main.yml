@@ -1,0 +1,109 @@
+---
+- name: Fetch device/VM details from NetBox
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      name: "{{ pxe_device_name }}"
+    validate_certs: false
+  register: nb_device
+  delegate_to: localhost
+  run_once: true
+
+- name: Fetch IP address for the PXE interface from NetBox
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      device_id: "{{ nb_device.value[0].id }}"
+      interface: "{{ pxe_interface_name }}"
+    validate_certs: false
+  register: nb_ip
+  delegate_to: localhost
+  run_once: true
+
+- name: Extract IP and Subnet Mask from NetBox IP string (e.g., 192.168.1.10/24)
+  ansible.builtin.set_fact:
+    pxe_server_ip: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('address') }}"
+    pxe_netmask: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('netmask') }}"
+    pxe_cidr: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('prefix') }}"
+
+- name: Fetch Prefix (Subnet) to get Gateway and DHCP ranges from NetBox Custom Fields
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      prefix: "{{ pxe_server_ip }}/{{ pxe_cidr }}"
+    validate_certs: false
+  register: nb_prefix
+  delegate_to: localhost
+  run_once: true
+
+- name: Set Network facts from NetBox Prefix Custom Fields (with fallbacks)
+  ansible.builtin.set_fact:
+    pxe_gateway: "{{ nb_prefix.value[0].custom_fields.gateway | default(pxe_server_ip | ansible.utils.ipmath(-1)) }}" # Фоллбек: .254 или последний IP
+    pxe_dns: "{{ nb_prefix.value[0].custom_fields.dns | default('8.8.8.8') }}"
+    pxe_dhcp_range_start: "{{ nb_prefix.value[0].custom_fields.dhcp_start | default(pxe_server_ip | ansible.utils.ipmath(10)) }}"
+    pxe_dhcp_range_end: "{{ nb_prefix.value[0].custom_fields.dhcp_end | default(pxe_server_ip | ansible.utils.ipmath(50)) }}"
+    pxe_proxy_dhcp: "{{ nb_prefix.value[0].custom_fields.proxy_dhcp | default(false) }}"
+
+
+# БЛОК 2: Настройка PXE (как в прошлом ответе)
+- name: Install required packages
+  apt:
+    name: [dnsmasq, syslinux, nginx, wget, xz-utils, cpio]
+    state: present
+    update_cache: yes
+
+- name: Create TFTP and HTTP directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ tftp_root }}"
+    - "{{ tftp_root }}/pxelinux.cfg"
+    - "{{ http_root }}"
+
+- name: Download Debian netboot image
+  get_url:
+    url: "{{ debian_mirror }}/dists/{{ debian_release }}/main/installer-{{ debian_arch }}/current/images/netboot/netboot.tar.gz"
+    dest: /tmp/netboot.tar.gz
+    mode: '0644'
+
+- name: Extract netboot image to HTTP root
+  unarchive:
+    src: /tmp/netboot.tar.gz
+    dest: "{{ http_root }}"
+    remote_src: yes
+    extra_opts: ['--strip-components=1']
+
+- name: Copy PXE boot files to TFTP root
+  copy:
+    src: "/usr/lib/syslinux/modules/bios/{{ item }}"
+    dest: "{{ tftp_root }}/{{ item }}"
+    remote_src: yes
+    mode: '0644'
+  loop: [pxelinux.0, ldlinux.c32, libcom32.c32, libutil.c32, vesamenu.c32]
+
+- name: Template dnsmasq configuration
+  template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.d/pxe.conf
+    mode: '0644'
+  notify: Restart dnsmasq
+
+- name: Template PXE boot menu
+  template:
+    src: pxelinux.cfg_default.j2
+    dest: "{{ tftp_root }}/pxelinux.cfg/default"
+    mode: '0644'
+
+- name: Ensure services are started and enabled
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop: [dnsmasq, nginx]
