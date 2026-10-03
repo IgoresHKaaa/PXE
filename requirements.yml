@@ -1,0 +1,5 @@
+---
+collections:
+  - name: netbox.netbox
+  - name: ansible.utils
+  - name: ansible.posix
