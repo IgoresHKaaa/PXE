@@ -12,7 +12,7 @@ packer {
 }
 
 variable "vm_name" { type = string; default = "pxe-server-01" }
-variable "netbox_ip" { type = string; default = "192.168.1.10/24" } # Формат CIDR
+variable "netbox_ip" { type = string; default = "192.168.1.10/24" } 
 variable "netbox_gateway" { type = string; default = "192.168.1.1" }
 variable "netbox_dns" { type = string; default = "8.8.8.8" }
 
@@ -42,7 +42,7 @@ source "qemu" "debian13_pxe" {
     "<esc><wait>",
     "install auto=true priority=critical ",
     "netcfg/get_ipaddress=${local.ip_address} ",
-    "netcfg/get_netmask=${local.ip_cidr} ", # Packer сам конвертирует CIDR в маску в preseed, но лучше передать маску
+    "netcfg/get_netmask=${local.ip_cidr} ", 
     "netcfg/get_gateway=${var.netbox_gateway} ",
     "netcfg/get_nameservers=${var.netbox_dns} ",
     "preseed/url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg <enter>"
