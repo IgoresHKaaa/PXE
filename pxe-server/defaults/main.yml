@@ -1,0 +1,11 @@
+---
+pxe_device_name: "{{ inventory_hostname }}"
+pxe_interface_name: "eth0" # поменять на нужный адрес
+
+pxe_local_files_path: "{{ playbook_dir }}/../roles/pxe_server/files"
+
+debian_release: trixie
+debian_arch: amd64
+
+tftp_root: /var/lib/tftpboot
+http_root: /var/www/html/pxe

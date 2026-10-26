@@ -1,0 +1,13 @@
+DEFAULT vesamenu.c32
+PROMPT 0
+TIMEOUT 300
+MENU TITLE PXE Boot Menu - Debian {{ debian_release | capitalize }}
+
+LABEL debian_install
+    MENU LABEL Install Debian {{ debian_release | capitalize }}
+    KERNEL debian-installer/{{ debian_arch }}/linux
+    APPEND vga=788 initrd=debian-installer/{{ debian_arch }}/initrd.gz auto=true priority=critical url=http://{{ pxe_server_ip }}/pxe/preseed.cfg --- quiet
+
+LABEL debian_local
+    MENU LABEL Boot from local drive
+    LOCALBOOT 0

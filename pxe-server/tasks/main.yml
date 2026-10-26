@@ -1,0 +1,117 @@
+---
+#Получение данных из NetBox
+- name: Извлечение сведений об устройстве из NetBox
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      name: "{{ pxe_device_name }}"
+    validate_certs: false
+  register: nb_device
+  delegate_to: localhost
+  run_once: true
+
+- name: Извлечение IP-адрес для интерфейса PXE из NetBox
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      device_id: "{{ nb_device.value[0].id }}"
+      interface: "{{ pxe_interface_name }}"
+    validate_certs: false
+  register: nb_ip
+  delegate_to: localhost
+  run_once: true
+
+- name: Извлечение IP-адреса и маски подсети из строки IP NetBox
+  ansible.builtin.set_fact:
+    pxe_server_ip: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('address') }}"
+    pxe_netmask: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('netmask') }}"
+    pxe_cidr: "{{ nb_ip.value[0].address | ansible.utils.ipaddr('prefix') }}"
+
+- name: Выбор подсети для получения диапазонов шлюза и DHCP
+  netbox.netbox.nb_lookup:
+    api_endpoint: "{{ netbox_url }}"
+    token: "{{ netbox_token }}"
+    api_filter:
+      prefix: "{{ pxe_server_ip }}/{{ pxe_cidr }}"
+    validate_certs: false
+  register: nb_prefix
+  delegate_to: localhost
+  run_once: true
+
+- name: Установить сетевые данные из пользовательских полей NetBox Prefix
+  ansible.builtin.set_fact:
+    pxe_gateway: "{{ nb_prefix.value[0].custom_fields.gateway | default(pxe_server_ip | ansible.utils.ipmath(-1)) }}"
+    pxe_dns: "{{ nb_prefix.value[0].custom_fields.dns | default('8.8.8.8') }}"
+    pxe_dhcp_range_start: "{{ nb_prefix.value[0].custom_fields.dhcp_start | default(pxe_server_ip | ansible.utils.ipmath(10)) }}"
+    pxe_dhcp_range_end: "{{ nb_prefix.value[0].custom_fields.dhcp_end | default(pxe_server_ip | ansible.utils.ipmath(50)) }}"
+    pxe_proxy_dhcp: "{{ nb_prefix.value[0].custom_fields.proxy_dhcp | default(false) }}"
+
+#Базовая настройка и пакеты
+- name: Установка необходимых пакетов
+  apt:
+    name: [dnsmasq, syslinux, nginx, rsync]
+    state: present
+    update_cache: yes
+
+- name: Создание каталогов TFTP и HTTP
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ tftp_root }}"
+    - "{{ tftp_root }}/pxelinux.cfg"
+    - "{{ http_root }}"
+
+#Синхронизация локальных файлов PXE
+- name: Синхронизация локальных TFTP-файлы с TFTP root
+  ansible.posix.synchronize:
+    src: "{{ pxe_local_files_path }}/tftp/"
+    dest: "{{ tftp_root }}/"
+    delete: no
+    rsync_opts: ["--no-motd"]
+  delegate_to: localhost
+
+- name: Синхронизация локальных HTTP-файлы с HTTP root
+  ansible.posix.synchronize:
+    src: "{{ pxe_local_files_path }}/http/"
+    dest: "{{ http_root }}/"
+    delete: no
+    rsync_opts: ["--no-motd"]
+  delegate_to: localhost
+
+- name: Копирование модулей syslinux
+  copy:
+    src: "/usr/lib/syslinux/modules/bios/{{ item }}"
+    dest: "{{ tftp_root }}/{{ item }}"
+    remote_src: yes
+    mode: '0644'
+  loop: [pxelinux.0, ldlinux.c32, libcom32.c32, libutil.c32, vesamenu.c32]
+  ignore_errors: yes
+
+#Конфигурация сервисов
+
+- name: Конфигурация шаблона dnsmasq
+  template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.d/pxe.conf
+    mode: '0644'
+  notify: Restart dnsmasq
+
+- name: Шаблонное загрузочное меню PXE
+  template:
+    src: pxelinux.cfg_default.j2
+    dest: "{{ tftp_root }}/pxelinux.cfg/default"
+    mode: '0644'
+
+- name: Проверка запуска сервиса
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  loop: [dnsmasq, nginx]

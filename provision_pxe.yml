@@ -1,0 +1,12 @@
+---
+- name: Provision PXE Server
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    netbox_url: "{{ lookup('env', 'NETBOX_API') | default('https://netbox.local', true) }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('your_token', true) }}"
+
+  roles:
+    - role: pxe_server
